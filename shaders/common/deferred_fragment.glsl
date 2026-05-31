@@ -1,0 +1,200 @@
+#include "/lib/config.glsl"
+
+/* Color utils */
+
+#ifdef THE_END
+    #include "/lib/color_utils_end.glsl"
+#elif defined NETHER
+    #include "/lib/color_utils_nether.glsl"
+#else
+    #include "/lib/color_utils.glsl"
+#endif
+
+/* Uniforms */
+
+uniform sampler2D colortex1;
+uniform ivec2 eyeBrightnessSmooth;
+uniform int isEyeInWater;
+uniform sampler2D depthtex0;
+uniform float far;
+uniform float near;
+uniform float blindness;
+uniform float rainStrength;
+uniform sampler2D gaux3;
+uniform int frameCounter;
+
+#if V_CLOUDS != 0
+    uniform sampler2D gaux2;
+#endif
+
+#ifdef NETHER
+    uniform vec3 fogColor;
+#endif
+
+#if AO == 1
+    uniform float aspectRatioInverse;
+    uniform float fovYInverse;
+#endif
+
+#if V_CLOUDS != 0 && !defined UNKNOWN_DIM
+    uniform sampler2D noisetex;
+    uniform vec3 cameraPosition;
+    uniform vec3 sunPosition;
+
+    #if defined DISTANT_HORIZONS
+        uniform sampler2D dhDepthTex0;
+        uniform float dhNearPlane;
+        uniform float dhFarPlane;
+        uniform float viewWidth;
+        uniform float viewHeight;
+    #endif
+#endif
+
+uniform mat4 gbufferModelViewInverse;
+uniform mat4 gbufferProjectionInverse;
+uniform float pixelSizeX;
+uniform float pixelSizeY;
+
+#if AO == 1 || (V_CLOUDS != 0 && !defined UNKNOWN_DIM)
+    uniform mat4 gbufferProjection;
+    uniform float frameTimeCounter;
+    uniform sampler2D colortex2;
+#endif
+
+/* Ins / Outs */
+
+varying vec2 texcoord;
+varying vec3 upVector;  // Flat
+
+#if (V_CLOUDS != 0 && !defined UNKNOWN_DIM) && !defined NO_CLOUDY_SKY
+    varying float umbral;
+    varying vec3 cloudColor;
+    varying vec3 darkCloudColor;
+#endif
+
+#if AO == 1
+    varying float fogDensityCoeff;
+#endif
+
+/* Utility functions */
+
+#include "/lib/depth.glsl"
+#include "/lib/luma.glsl"
+
+#ifdef DISTANT_HORIZONS
+    #include "/lib/depth_dh.glsl"
+#endif
+
+#if AO == 1 || (V_CLOUDS != 0 && !defined UNKNOWN_DIM)
+    #include "/lib/dither.glsl"
+#endif
+
+#if AO == 1
+    #include "/lib/ao.glsl"
+#endif
+
+#if (V_CLOUDS != 0 && !defined UNKNOWN_DIM)
+    #include "/lib/projection_utils.glsl"
+
+    #ifdef THE_END
+        #include "/lib/volumetric_clouds_end.glsl"
+    #else
+        #include "/lib/volumetric_clouds.glsl"
+    #endif
+#endif
+
+// MAIN FUNCTION ------------------
+
+void main() {
+    vec4 blockColor = texture2DLod(colortex1, texcoord, 0);
+    float depth = texture2DLod(depthtex0, texcoord, 0).r;
+    float linearDepth = ld(depth);
+
+    vec2 eyeBrightSmoothFloat = vec2(eyeBrightnessSmooth);
+
+    vec3 eyeDirection = vec3(1.0);
+
+    #if AO == 1 || (V_CLOUDS != 0 && !defined UNKNOWN_DIM)
+        #if AA_TYPE > 0
+            float dither = shiftedSemiblue(gl_FragCoord.xy);
+        #else
+            float dither = semiblue(gl_FragCoord.xy);
+        #endif
+    #endif
+
+    #if (V_CLOUDS != 0 && !defined UNKNOWN_DIM) && !defined NO_CLOUDY_SKY
+        if(linearDepth > 0.9999) {  // Only sky
+            vec4 farPlaneClipPos = gbufferModelViewInverse * gbufferProjectionInverse * (vec4(texcoord, 1.0, 1.0) * 2.0 - 1.0);
+            eyeDirection = normalize(farPlaneClipPos.xyz);
+
+            #ifdef THE_END
+                float bright = dot(eyeDirection, vec3(0.0, 0.89442719, 0.4472136));
+                bright = clamp((bright * 2.0) - 1.0, 0.0, 1.0);
+                bright *= bright * bright * bright;
+            #else
+                float bright = dot(eyeDirection, normalize((gbufferModelViewInverse * vec4(sunPosition, 0.0)).xyz));
+                bright = clamp(bright * bright * bright, 0.0, 1.0);
+            #endif
+
+            #ifdef THE_END
+                #ifdef END_CLOUDS
+                    blockColor.rgb = get_end_cloud(eyeDirection, blockColor.rgb, bright, dither, cameraPosition, CLOUD_STEPS_AVG);
+                #endif
+            #else
+                blockColor.rgb = get_cloud(eyeDirection, blockColor.rgb, bright, dither, cameraPosition, CLOUD_STEPS_AVG, umbral, cloudColor, darkCloudColor);
+            #endif
+        }
+
+    #else
+        #if defined NETHER
+            #if !defined DISTANT_HORIZONS
+                if(linearDepth > 0.9999) {  // Only sky
+                    blockColor = vec4(mix(fogColor * 0.1, vec3(1.0), 0.04), 1.0);
+                }
+            #endif
+        #elif !defined NETHER && !defined THE_END
+            if(linearDepth > 0.9999 && isEyeInWater == 1) {  // Only sky and water
+                vec4 screen_pos = vec4(gl_FragCoord.xy * vec2(pixelSizeX, pixelSizeY), gl_FragCoord.z, 1.0);
+                vec4 fragposition = gbufferProjectionInverse * (screen_pos * 2.0 - 1.0);
+
+                vec4 farPlaneClipPos = gbufferModelViewInverse * vec4(fragposition.xyz, 0.0);
+                eyeDirection = normalize(farPlaneClipPos.xyz);
+            }
+        #endif
+    #endif
+
+    #if AO == 1
+        // AO distance attenuation
+        #if defined NETHER
+            if(NETHER_FOG_DISTANCE == 0) {
+                linearDepth = sqrt(linearDepth);
+            } else {
+                float screen_distance = 2.0 * near * far / (far + near - (2.0 * depth - 1.0) * (far - near));
+                linearDepth = screen_distance / NETHER_SIGHT;
+            }
+        #endif
+        float ao_att =
+            pow(clamp(linearDepth * 1.6, 0.0, 1.0), mix(fogDensityCoeff, 1.0, rainStrength));
+
+        float final_ao = mix(dbao(dither), 1.0, ao_att);
+        blockColor.rgb *= 1.0;
+    #endif
+
+    #if defined THE_END || defined NETHER
+        #define NIGHT_CORRECTION 1.0
+    #else
+        #define NIGHT_CORRECTION dayBlendFloat(1.0, 1.0, 0.1)
+    #endif
+
+    // Underwater sky
+    if(isEyeInWater == 1) {
+        if(linearDepth > 0.9999) {
+            blockColor.rgb = mix(NIGHT_CORRECTION * WATER_COLOR * ((eyeBrightSmoothFloat.y * .8 + 48) * 0.004166666666666667), blockColor.rgb, max(clamp(eyeDirection.y - 0.1, 0.0, 1.0), rainStrength));
+        }
+    }
+
+    blockColor = clamp(blockColor, vec4(0.0), vec4(vec3(50.0), 1.0));
+    /* DRAWBUFFERS:14 */
+    gl_FragData[0] = vec4(blockColor.rgb, depth);
+    gl_FragData[1] = blockColor;
+}

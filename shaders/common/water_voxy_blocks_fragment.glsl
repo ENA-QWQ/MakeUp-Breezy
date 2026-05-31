@@ -1,0 +1,223 @@
+#include "/lib/config.glsl"
+#include "/lib/basic_utils.glsl"
+#include "/lib/luma.glsl"
+#include "/lib/dither.glsl"
+
+/* Color utils */
+
+#if defined THE_END
+    #include "/lib/color_utils_end.glsl"
+#elif defined NETHER
+    #include "/lib/color_utils_nether.glsl"
+#else
+    #include "/lib/color_utils.glsl"
+#endif
+
+#include "/lib/projection_utils_voxy.glsl"
+#include "/lib/water_voxy.glsl"
+
+layout(location = 0) out vec4 gbufferData0;
+
+/*
+struct VoxyFragmentParameters {
+	vec4 sampledColour;
+	vec2 tile;
+	vec2 uv;
+	uint face;
+	uint modelId;
+	vec2 lightMap;
+	vec4 tinting;
+	uint customId;
+};
+*/
+
+void voxy_emitFragment(VoxyFragmentParameters parameters) {
+    // Includes
+    #include "/src/voxy_uniforms_replace.glsl"
+    #include "/src/hi_sky_voxy.glsl"
+    #include "/src/low_sky_voxy.glsl"
+
+    #include "/src/voxy_position_light.glsl"
+
+    directLightStrength = clamp(directLightStrength, 0.0, 1.0);
+
+    #if defined THE_END || defined NETHER
+        vec3 omniLight = LIGHT_DAY_COLOR * omniStrength;
+    #else
+        directLightColor = mix(directLightColor, ZENITH_SKY_RAIN_COLOR * luma(directLightColor) * 0.4, rainStrength);
+
+        // Minimal light
+        vec3 omniColor = mix(ZenithSkyColorRGB, directLightColor * 0.45, OMNI_TINT);
+        float omniColorLuma = colorAverage(omniColor);
+        // --- OPTIMIZACIÓN #3: Prevenir división por cero ---
+        float lumaRatio = AVOID_DARK_LEVEL / max(omniColorLuma, 0.0001);
+        vec3 omniColorMin = omniColor * lumaRatio;
+        omniColor = max(omniColor, omniColorMin);
+
+        vec3 omniLight = mix(omniColorMin, omniColor, visibleSky) * omniStrength;
+    #endif
+
+    #if !defined THE_END && !defined NETHER
+        #ifndef SHADOW_CASTING
+            // Fake shadows
+            if (isEyeInWater == 0) {
+                // Reemplazar pow(x, 10.0) con multiplicaciones ---
+                float visSky2 = visibleSky * visibleSky;
+                float visSky4 = visSky2 * visSky2;
+                float visSky8 = visSky4 * visSky4;
+                directLightStrength = mix(0.0, directLightStrength, visSky8 * visSky2);
+            } else {
+                directLightStrength = mix(0.0, directLightStrength, visibleSky);
+            }
+        #else
+            directLightStrength = mix(0.0, directLightStrength, visibleSky);
+        #endif
+    #endif
+
+    if (customId == ENTITY_EMMISIVE) {
+        directLightStrength = 10.0;
+    } else if (customId == ENTITY_S_EMMISIVE) {
+        directLightStrength = 1.0;
+    }
+
+    vec3 binormal = normalize(vxModelView[2].xyz);
+    vec3 tangent = normalize(vxModelView[0].xyz);
+    vec3 upVector = normalize(vxModelView[1].xyz);
+
+    // Fog Vertex
+
+    // 1. Reconstruir clip space (base común)
+    vec2 ndc = (gl_FragCoord.xy / vec2(viewWidth, viewHeight)) * 2.0 - 1.0;
+    float depth = gl_FragCoord.z * 2.0 - 1.0;
+    vec4 clipPos = vec4(ndc, depth, 1.0);
+
+    // 2. View space
+    vec4 viewSpacePos4D = vxProjInv * clipPos;
+    viewSpacePos4D /= viewSpacePos4D.w;
+    vec3 fragposition = viewSpacePos4D.xyz;
+
+    // 3. World space derivado directamente de fragposition
+    vec4 worldPos = vxModelViewInv * viewSpacePos4D;
+    vec4 worldposition = worldPos + vec4(cameraPosition, 0.0);
+
+    // 3. La distancia desde la cámara (equivalente a gl_FogFragCoord)
+    float fogFragCoord = length(worldPos.xyz);
+
+    vec2 eyeBrightSmoothFloat = vec2(eyeBrightnessSmooth);
+
+    #if !defined THE_END && !defined NETHER
+        float fogIntensityCoeff = max(eyeBrightSmoothFloat.y * 0.004166666666666667, visibleSky);
+        float frogAdjust = pow(
+            clamp(fogFragCoord / float(vxRenderDistance * 16), 0.0, 1.0) * fogIntensityCoeff,
+            mix(fogDensityCoeff * 0.15, 0.5, rainStrength)
+        );
+    #else
+        float frogAdjust = sqrt(clamp(fogFragCoord / 48000.0, 0.0, 1.0));
+    #endif
+
+    // ---- Original Fragment Logic
+
+    vec4 blockColor;
+    vec3 realLight;
+
+    #ifdef VANILLA_WATER
+        vec3 waterNormalBase = vec3(0.0, 0.0, 1.0);
+    #else
+        vec3 waterNormalBase = normal_waves_voxy(worldposition.xzy);
+    #endif
+
+    vec3 surfaceNormal;
+    if(customId == ENTITY_WATER) {  // Water
+        surfaceNormal = get_normals_voxy(waterNormalBase, fragposition, tangent, binormal, normal);
+    } else {
+        surfaceNormal = get_normals_voxy(vec3(0.0, 0.0, 1.0), fragposition, tangent, binormal, normal);
+    }
+
+    float normalDotEye = dot(surfaceNormal, normalize(fragposition));
+    float fresnel = squarePow(1.0 + normalDotEye);
+
+    vec3 reflectWaterVector = reflect(fragposition, surfaceNormal);
+    vec3 normalizedReflectWaterVector = normalize(reflectWaterVector);
+
+    vec3 skyColorReflect;
+    if(isEyeInWater == 0 || isEyeInWater == 2) {
+        skyColorReflect = mix(horizonSkyColor, zenithSkyColor, smoothstep(0.0, 1.0, pow(clamp(dot(normalizedReflectWaterVector, upVector), 0.0001, 1.0), 0.333)));
+    } else {
+        skyColorReflect = zenithSkyColor * .5 * ((eyeBrightSmoothFloat.y * .8 + 48) * 0.004166666666666667);
+    }
+
+    skyColorReflect = xyzToRgb(skyColorReflect);
+
+    if(customId == ENTITY_WATER) {  // Water
+        #ifdef VANILLA_WATER
+            blockColor = parameters.sampledColour;
+
+            float shadowValue = abs((dayNightMix * 2.0) - 1.0);
+            float fresnelTex = luma(blockColor.rgb);
+
+            realLight = omniLight +
+                (directLightStrength * shadowValue * directLightColor) * (1.0 - rainStrength * 0.75) +
+                candleColor;
+
+            realLight *= (fresnelTex * 2.0) - 0.25;
+
+            blockColor.rgb *= mix(realLight, vec3(1.0), nightVision * .125) * tintColor.rgb;
+
+            blockColor.rgb = water_shader_voxy(fragposition, surfaceNormal, blockColor.rgb, skyColorReflect, normalizedReflectWaterVector, fresnel, visibleSky, directLightColor, lmcoord);
+
+            blockColor.a = sqrt(blockColor.a);
+        #else
+            #if WATER_TEXTURE == 1
+                blockColor = parameters.sampledColour;
+                float waterTexture = luma(blockColor.rgb);
+            #else
+                float waterTexture = 1.0;
+            #endif
+
+            realLight = omniLight +
+                (directLightStrength * visibleSky * directLightColor) * (1.0 - rainStrength * 0.75) +
+                candleColor;
+
+            #if WATER_COLOR_SOURCE == 0
+                blockColor.rgb = waterTexture * realLight * WATER_COLOR;
+            #elif WATER_COLOR_SOURCE == 1
+                blockColor.rgb = 0.3 * waterTexture * realLight * tintColor.rgb;
+            #endif
+
+            blockColor = vec4(refraction_voxy(fragposition, blockColor.rgb, waterNormalBase), 1.0);
+
+            #if WATER_TEXTURE == 1
+                waterTexture += 0.25;
+                waterTexture *= waterTexture;
+                waterTexture *= waterTexture;
+                fresnel = clamp(fresnel * (waterTexture), 0.0, 1.0);
+            #endif
+
+            blockColor.rgb = water_shader_voxy(fragposition, surfaceNormal, blockColor.rgb, skyColorReflect, normalizedReflectWaterVector, fresnel, visibleSky, directLightColor, lmcoord);
+        #endif
+    } else {  // Otros translúcidos
+        blockColor = parameters.sampledColour;
+
+        blockColor *= tintColor;
+
+        float shadowValue = abs((dayNightMix * 2.0) - 1.0);
+
+        realLight = omniLight +
+            (directLightStrength * shadowValue * directLightColor) * (1.0 - rainStrength * 0.75) +
+            candleColor;
+
+        blockColor.rgb *= mix(realLight, vec3(1.0), nightVision * .125);
+
+        if(customId == ENTITY_STAINED) {  // Glass
+            blockColor = cristal_shader_voxy(fragposition, normal, blockColor, skyColorReflect, fresnel * fresnel, visibleSky, directLightColor, lmcoord);
+        }
+    }
+
+    #include "/src/finalcolor_voxy.glsl"
+
+    if (blindness > .01) {
+        blockColor.rgb = vec3(0.0);
+    }
+
+    gbufferData0 = blockColor;
+}

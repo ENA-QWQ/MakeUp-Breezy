@@ -1,0 +1,306 @@
+#include "/lib/config.glsl"
+
+#if defined THE_END
+    #include "/lib/color_utils_end.glsl"
+#elif defined NETHER
+    #include "/lib/color_utils_nether.glsl"
+#endif
+
+uniform float viewWidth;
+uniform float viewHeight;
+uniform int frameCounter;
+uniform sampler2D tex;
+uniform int isEyeInWater;
+uniform float nightVision;
+uniform float rainStrength;
+uniform float dayNightMix;
+uniform float pixelSizeX;
+uniform float pixelSizeY;
+uniform sampler2D gaux4;
+
+#if defined DISTANT_HORIZONS
+    uniform float dhNearPlane;
+    uniform float far;
+#endif
+
+#if defined GBUFFER_ENTITIES
+    uniform int entityId;
+    uniform vec4 entityColor;
+#endif
+
+#ifdef NETHER
+    uniform vec3 fogColor;
+#endif
+
+#if defined SHADOW_CASTING
+    uniform sampler2DShadow shadowtex1;
+    #if defined COLORED_SHADOW
+        uniform sampler2DShadow shadowtex0;
+        uniform sampler2D shadowcolor0;
+    #endif
+#endif
+
+uniform float blindness;
+
+#if MC_VERSION >= 11900
+    uniform float darknessFactor;
+    uniform float darknessLightFactor;
+#endif
+
+#ifdef MATERIAL_GLOSS
+#endif
+
+#if defined MATERIAL_GLOSS && !defined NETHER
+    uniform int worldTime;
+    uniform vec3 moonPosition;
+    uniform vec3 sunPosition;
+#endif
+
+#if SHADOW_LOCK > 0 && defined SHADOW_CASTING
+    uniform vec3 cameraPosition;
+    uniform mat4 shadowModelView;
+    uniform mat4 shadowProjection;
+    uniform vec3 shadowLightPosition;
+#endif
+
+#if defined THE_END || (SHADOW_LOCK > 0 && defined SHADOW_CASTING && !defined NETHER)
+    uniform mat4 gbufferModelView;
+#endif
+
+varying vec2 texcoord;
+varying vec4 tintColor;
+varying float frogAdjust;
+varying vec3 directLightColor;
+varying vec3 candleColor;
+varying float directLightStrength;
+varying vec3 omniLight;
+
+#if defined SHADOW_CASTING && SHADOW_LOCK > 0 && !defined NETHER
+    varying vec3 vWorldPos;
+    varying vec3 vNormal;
+    varying vec3 vBias;
+#endif
+
+#if defined GBUFFER_TERRAIN || defined GBUFFER_HAND || defined GBUFFER_ENTITIES
+    varying float isEmissiveEntity;
+#endif
+
+#ifdef FOLIAGE_V
+    varying float isFoliage;
+#endif
+
+#if defined SHADOW_CASTING && !defined NETHER
+    varying vec3 shadowPos;
+    varying float shadowDiffuse;
+#endif
+
+#if defined MATERIAL_GLOSS && !defined NETHER
+    varying vec3 flatNormal;
+    varying vec3 viewPositionNormalized;
+    varying vec2 lmcoordAlt;
+    varying float glossFactor;
+    varying float glossPower;
+    varying float lumaFactor;
+    varying float lumaPower;
+#endif
+
+#if (defined SHADOW_CASTING && !defined NETHER) || defined DISTANT_HORIZONS
+    #include "/lib/dither.glsl"
+#endif
+
+#if defined SHADOW_CASTING && !defined NETHER
+    #include "/lib/shadow_frag.glsl"
+#endif
+
+#include "/lib/luma.glsl"
+
+#if defined MATERIAL_GLOSS && !defined NETHER
+    #include "/lib/material_gloss_fragment.glsl"
+#endif
+
+#if defined SHADOW_CASTING && SHADOW_LOCK > 0 && !defined NETHER
+    #include "/lib/shadow_vertex.glsl"
+#endif
+
+vec3 quantizeByLuma(vec3 color, float steps) {
+    float l = luma(color);
+    if (l <= 0.0) return vec3(0.0);
+    float ql = floor(l * steps) / steps;
+    return color * (ql / max(l, 0.001));
+}
+
+void main() {
+    #if (defined SHADOW_CASTING && !defined NETHER) || defined DISTANT_HORIZONS
+        #if AA_TYPE > 0
+            float dither = shiftedDither13(gl_FragCoord.xy);
+        #else
+            float dither = dither17(gl_FragCoord.xy);
+        #endif
+    #endif
+    #if defined DISTANT_HORIZONS && !defined GBUFFER_BEACONBEAM
+        float t = far - dhNearPlane;
+        float sup = t * TRANSITION_DH_SUP;
+        float inf = t * TRANSITION_DH_INF;
+        float umbral = (gl_FogFragCoord - (dhNearPlane + inf)) / (far - sup - inf - dhNearPlane);
+        if(umbral > dither) {
+            discard;
+            return;
+        }
+    #endif
+
+    #if defined GBUFFER_ENTITIES && BLACK_ENTITY_FIX == 1
+        vec4 blockColor = texture2D(tex, texcoord);
+        if(blockColor.a < 0.1 && entityId != 10101) {
+            discard;
+        }
+        blockColor *= tintColor;
+    #else
+        vec4 blockColor = texture2D(tex, texcoord) * tintColor;
+    #endif
+
+    #if defined GBUFFER_ENTITIES
+        vec4 originalEntityColor = blockColor;
+    #endif
+
+    float block_luma = luma(blockColor.rgb);
+
+    float isEmissiveEntityLocal = 0.0;
+    #if defined GBUFFER_ENTITIES
+        if (isEmissiveEntity > 0.5 || entityId == 10202) {
+            isEmissiveEntityLocal = 1.0;
+        }
+    #endif
+
+    vec3 finalCandleColor = candleColor;
+    #if defined GBUFFER_TERRAIN || defined GBUFFER_HAND || defined GBUFFER_ENTITIES
+        if(isEmissiveEntityLocal > 0.5) {
+            finalCandleColor *= block_luma * 1.5;
+        }
+    #endif
+
+    finalCandleColor = finalCandleColor * 6.0;
+    finalCandleColor = quantizeByLuma(finalCandleColor, 16.0);
+
+    #ifdef GBUFFER_WEATHER
+        blockColor.a *= .5;
+    #endif
+
+    #if defined GBUFFER_ENTITIES
+        if(entityId == 10101) {
+            blockColor.a = 1.0;
+        }
+    #endif
+
+    #if defined SHADOW_CASTING && !defined NETHER
+        #if SHADOW_LOCK > 0
+            vec3 offsetVector = vNormal * 0.002;
+            vec3 preSnapPos = vWorldPos + offsetVector;
+            float texelSize = SHADOW_LOCK;
+            vec3 absPos = preSnapPos + cameraPosition;
+            vec3 snappedAbsolute = floor(absPos * texelSize) / texelSize;
+            snappedAbsolute += 0.5 / texelSize;
+            vec3 final_world_pos = (snappedAbsolute - cameraPosition) + vBias;
+            vec3 shadow_real_pos = get_shadow_pos(final_world_pos);
+        #else
+            vec3 shadow_real_pos = shadowPos;
+        #endif
+
+        const float DITHER_STRENGTH = 0.4;
+
+        #if defined COLORED_SHADOW
+            vec3 shadowValue = get_colored_shadow(shadow_real_pos, 0.0);
+            float brightness = (shadowValue.r + shadowValue.g + shadowValue.b) / 3.0;
+            float threshold = 0.5 + (dither - 0.5) * DITHER_STRENGTH;
+            shadowValue = vec3(step(threshold, brightness));
+        #else
+            float shadowValue = get_shadow(shadow_real_pos, 0.0);
+            float threshold = 0.5 + (dither - 0.5) * DITHER_STRENGTH;
+            shadowValue = step(threshold, shadowValue);
+        #endif
+    #else
+        float shadowValue = abs((dayNightMix * 2.0) - 1.0);
+        shadowValue = step(0.5, shadowValue);
+    #endif
+
+    #if !defined NETHER && !defined THE_END
+        float nightFactor = clamp(dayNightMix, 0.0, 1.0);
+    #else
+        float nightFactor = 0.0;
+    #endif
+
+    #ifdef FOLIAGE_V
+        float baseStrengthThreshold = isFoliage > 0.5 ? 0.15 : 0.05;
+    #else
+        float baseStrengthThreshold = 0.05;
+    #endif
+    float strengthThreshold = mix(baseStrengthThreshold, 0.001, nightFactor);
+    float binaryStrength = step(strengthThreshold, directLightStrength);
+
+    #if defined GBUFFER_BEACONBEAM
+        blockColor.rgb *= 1.5;
+    #elif defined GBUFFER_ENTITY_GLOW
+        blockColor.rgb = clamp(vec3(luma(blockColor.rgb)) * vec3(0.75, 0.75, 1.5), vec3(0.3), vec3(1.0));
+        vec3 realLight = omniLight + (shadowValue * directLightColor * binaryStrength) * (1.0 - (rainStrength * 0.75)) + finalCandleColor;
+        blockColor.rgb *= realLight;
+    #else
+        #if defined MATERIAL_GLOSS && !defined NETHER
+            float final_gloss_power = glossPower;
+            block_luma *= lumaFactor;
+
+            if(lumaPower < 0.0) {
+                final_gloss_power -= (block_luma * 73.334);
+            } else {
+                block_luma = pow(block_luma, lumaPower);
+            }
+
+            float material_gloss_factor = materialGloss(reflect(viewPositionNormalized, flatNormal), lmcoordAlt, final_gloss_power, flatNormal) * glossFactor;
+
+            float material = material_gloss_factor * block_luma;
+            vec3 mainLight = omniLight + (shadowValue * ((directLightColor * binaryStrength) + (directLightColor * material * 0.0))) * (1.0 - (rainStrength * 0.75));
+        #else
+            vec3 mainLight = omniLight + (shadowValue * directLightColor * binaryStrength) * (1.0 - (rainStrength * 0.75));
+        #endif
+
+        float mainLightLuma = luma(mainLight);
+        float lumaThreshold = mix(0.5, 0.05, nightFactor);
+        float binaryLight = step(lumaThreshold, mainLightLuma);
+
+        vec3 finalMainLight;
+        if (binaryLight > 0.5) {
+            float targetMaxLuma = mix(1.0, 0.45, nightFactor);
+            vec3 normalizedLight = mainLight / max(mainLightLuma, 0.001);
+            vec3 finalLightColor = normalizedLight * targetMaxLuma;
+            float blueBoost = mix(1.0, 1.4, nightFactor);
+            finalLightColor.b *= blueBoost;
+            finalLightColor = finalLightColor / max(luma(finalLightColor), 0.001) * targetMaxLuma;
+            finalMainLight = finalLightColor;
+        } else {
+            vec3 darkColor = mix(vec3(0.2), vec3(0.04, 0.04, 0.10), nightFactor);
+            finalMainLight = darkColor;
+        }
+
+        vec3 finalLight = finalMainLight + finalCandleColor;
+
+        blockColor.rgb *= mix(finalLight, vec3(1.0), nightVision * 0.125);
+        blockColor.rgb *= mix(vec3(1.0, 1.0, 1.0), vec3(NV_COLOR_R, NV_COLOR_G, NV_COLOR_B), nightVision);
+    #endif
+
+    #if defined GBUFFER_ENTITIES
+        if(entityId == 10101) {
+            blockColor = vec4(1.0, 1.0, 1.0, 0.5);
+        } else if (entityId == 10201) {
+            blockColor = originalEntityColor;
+            blockColor.rgb = blockColor.rgb * blockColor.rgb;
+        } else {
+            float entity_poderation = luma(finalLight);
+            blockColor.rgb = mix(blockColor.rgb, entityColor.rgb, entityColor.a * entity_poderation * 3.0);
+        }
+    #endif
+
+    #if MC_VERSION < 11300 && defined GBUFFER_TEXTURED
+        blockColor.rgb *= 1.5;
+    #endif
+
+    #include "/src/finalcolor.glsl"
+    #include "/src/writebuffers.glsl"
+}
