@@ -223,24 +223,27 @@ void main() {
     #endif
 
     #if !defined NETHER && !defined THE_END
-        float nightFactor = clamp(dayNightMix, 0.0, 1.0);
+        float nightFactor = 1.0 - clamp(dayNightMix, 0.0, 1.0);
     #else
         float nightFactor = 0.0;
     #endif
+
+    vec3 finalDirectLightColor = directLightColor;
+    float finalDirectLightStrength = directLightStrength;
 
     #ifdef FOLIAGE_V
         float baseStrengthThreshold = isFoliage > 0.5 ? 0.15 : 0.05;
     #else
         float baseStrengthThreshold = 0.05;
     #endif
-    float strengthThreshold = mix(baseStrengthThreshold, 0.001, nightFactor);
-    float binaryStrength = step(strengthThreshold, directLightStrength);
+    float strengthThreshold = baseStrengthThreshold;
+    float binaryStrength = step(strengthThreshold, finalDirectLightStrength);
 
     #if defined GBUFFER_BEACONBEAM
         blockColor.rgb *= 1.5;
     #elif defined GBUFFER_ENTITY_GLOW
         blockColor.rgb = clamp(vec3(luma(blockColor.rgb)) * vec3(0.75, 0.75, 1.5), vec3(0.3), vec3(1.0));
-        vec3 realLight = omniLight + (shadowValue * directLightColor * binaryStrength) * (1.0 - (rainStrength * 0.75)) + finalCandleColor;
+        vec3 realLight = omniLight + (shadowValue * finalDirectLightColor * binaryStrength) * (1.0 - (rainStrength * 0.75)) + finalCandleColor;
         blockColor.rgb *= realLight;
     #else
         #if defined MATERIAL_GLOSS && !defined NETHER
@@ -256,9 +259,9 @@ void main() {
             float material_gloss_factor = materialGloss(reflect(viewPositionNormalized, flatNormal), lmcoordAlt, final_gloss_power, flatNormal) * glossFactor;
 
             float material = material_gloss_factor * block_luma;
-            vec3 mainLight = omniLight + (shadowValue * ((directLightColor * binaryStrength) + (directLightColor * material * 0.0))) * (1.0 - (rainStrength * 0.75));
+            vec3 mainLight = omniLight + (shadowValue * ((finalDirectLightColor * binaryStrength) + (finalDirectLightColor * material * 0.0))) * (1.0 - (rainStrength * 0.75));
         #else
-            vec3 mainLight = omniLight + (shadowValue * directLightColor * binaryStrength) * (1.0 - (rainStrength * 0.75));
+            vec3 mainLight = omniLight + (shadowValue * finalDirectLightColor * binaryStrength) * (1.0 - (rainStrength * 0.75));
         #endif
 
         float mainLightLuma = luma(mainLight);
@@ -267,10 +270,10 @@ void main() {
 
         vec3 finalMainLight;
         if (binaryLight > 0.5) {
-            float targetMaxLuma = mix(1.0, 0.45, nightFactor);
+            float targetMaxLuma = mix(1.0, 0.3, nightFactor);
             vec3 normalizedLight = mainLight / max(mainLightLuma, 0.001);
             vec3 finalLightColor = normalizedLight * targetMaxLuma;
-            float blueBoost = mix(1.0, 1.4, nightFactor);
+            float blueBoost = mix(1.0, 1.1, nightFactor);
             finalLightColor.b *= blueBoost;
             finalLightColor = finalLightColor / max(luma(finalLightColor), 0.001) * targetMaxLuma;
             finalMainLight = finalLightColor;
