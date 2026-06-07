@@ -302,5 +302,3 @@ option.ENABLE_OUTLINE=轮廓线
 value.ENABLE_OUTLINE.0=关
 value.ENABLE_OUTLINE.1=开
 comment.ENABLE_OUTLINE=为方块轮廓增加黑色描边效果
-value.OUTLINE_MAX_DISTANCE=%s 格
-value.OUTLINE_THICKNESS=%s 像素

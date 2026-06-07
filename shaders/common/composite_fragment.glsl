@@ -174,14 +174,17 @@ void main() {
         #else
             vec3 auxVector =
                 normalize((gbufferModelViewInverse * vec4(astroLightPos, 0.0)).xyz);
-            float volumetricIntensity =
-                clamp(dot(centerEyeDirection, auxVector), 0.0, 1.0);
-            volumetricIntensity *= dot(eyeDirection, auxVector);
+            float lightDot = dot(eyeDirection, auxVector);
+            float volumetricIntensity = clamp(lightDot, 0.0, 1.0);
+            volumetricIntensity = max(volumetricIntensity, 0.15);
             volumetricIntensity =
-                pow(clamp(volumetricIntensity, 0.0, 1.0), volumetricDayMixer) * 0.5 * abs(dayNightMix * 2.0 - 1.0);
+                pow(volumetricIntensity, volumetricDayMixer) * 0.5 * abs(dayNightMix * 2.0 - 1.0);
+
+            float skyFade = 1.0 - pow(clamp(d, 0.0, 1.0), 3.0);
 
             blockColor.rgb =
-                mix(blockColor.rgb, volumetricLightColor * volumetricLight, volumetricIntensity * (volumetricLight * 0.5 + 0.5) * (1.0 - rainStrength));
+                mix(blockColor.rgb, volumetricLightColor * volumetricLight,
+                    volumetricIntensity * (volumetricLight * 0.5 + 0.5) * (1.0 - rainStrength) * skyFade);
         #endif
     #endif
 
@@ -197,20 +200,22 @@ void main() {
 
         #if defined THE_END
             float volumetricIntensity = dot(eyeDirection, normalize((gbufferModelViewInverse * gbufferModelView * vec4(0.0, 0.89442719, 0.4472136, 0.0)).xyz));
-        #else
-            float volumetricIntensity = dot(eyeDirection, normalize((gbufferModelViewInverse * vec4(shadowLightPosition, 0.0)).xyz));
-        #endif
-
-        #if defined THE_END
             volumetricIntensity =
                 ((squarePow(clamp((volumetricIntensity + .666667) * 0.6, 0.0, 1.0)) * 0.5));
             blockColor.rgb += (volumetricLightColor * volumetricLight * volumetricIntensity * 2.0);
         #else
+            vec3 lightDir = normalize((gbufferModelViewInverse * vec4(shadowLightPosition, 0.0)).xyz);
+            float lightDot = dot(eyeDirection, lightDir);
+            float volumetricIntensity = clamp(lightDot, 0.0, 1.0);
+            volumetricIntensity = max(volumetricIntensity, 0.15);
             volumetricIntensity =
-                pow(clamp((volumetricIntensity + 0.5) * 0.666666666666666, 0.0, 1.0), volumetricDayMixer) * 0.6 * abs(dayNightMix * 2.0 - 1.0);
+                pow(volumetricIntensity, volumetricDayMixer) * 0.6 * abs(dayNightMix * 2.0 - 1.0);
+
+            float skyFade = 1.0 - pow(clamp(d, 0.0, 1.0), 3.0);
 
             blockColor.rgb =
-                mix(blockColor.rgb, volumetricLightColor * volumetricLight, volumetricIntensity * (volumetricLight * 0.5 + 0.5) * (1.0 - rainStrength));
+                mix(blockColor.rgb, volumetricLightColor * volumetricLight,
+                    volumetricIntensity * (volumetricLight * 0.5 + 0.5) * (1.0 - rainStrength) * skyFade);
         #endif
     #endif
 
@@ -243,13 +248,13 @@ void main() {
 
     float rimIntensityV = getRimIntensity(ldLeft, ldRight, ldCenter);
     float rimIntensityH = getRimIntensity(ldUp,   ldDown,   ldCenter);
-	float rimIntensity = max(rimIntensityV, rimIntensityH);
-	float dist = linearDepth * far;
-	#if ENABLE_OUTLINE == 1
-		if (d < 0.9999 && rimIntensity == 1.0 && dist < outline_max_distance) {
-			blockColor.rgb = vec3(0.0);  
-		}
-	#endif
+    float rimIntensity = max(rimIntensityV, rimIntensityH);
+    float dist = linearDepth * far;
+    #if ENABLE_OUTLINE == 1
+        if (d < 0.9999 && rimIntensity == 1.0 && dist < outline_max_distance) {
+            blockColor.rgb = vec3(0.0);  
+        }
+    #endif
 
     #ifdef BLOOM
         float bloom_luma = smoothstep(0.85, 1.0, luma(blockColor.rgb * exposure)) * 0.5;
