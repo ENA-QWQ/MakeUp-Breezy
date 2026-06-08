@@ -180,11 +180,9 @@ void main() {
             volumetricIntensity =
                 pow(volumetricIntensity, volumetricDayMixer) * 0.5 * abs(dayNightMix * 2.0 - 1.0);
 
-            float skyFade = 1.0 - pow(clamp(d, 0.0, 1.0), 3.0);
-
             blockColor.rgb =
                 mix(blockColor.rgb, volumetricLightColor * volumetricLight,
-                    volumetricIntensity * (volumetricLight * 0.5 + 0.5) * (1.0 - rainStrength) * skyFade);
+                    volumetricIntensity * (volumetricLight * 0.5 + 0.5) * (1.0 - rainStrength));
         #endif
     #endif
 
@@ -204,18 +202,13 @@ void main() {
                 ((squarePow(clamp((volumetricIntensity + .666667) * 0.6, 0.0, 1.0)) * 0.5));
             blockColor.rgb += (volumetricLightColor * volumetricLight * volumetricIntensity * 2.0);
         #else
-            vec3 lightDir = normalize((gbufferModelViewInverse * vec4(shadowLightPosition, 0.0)).xyz);
-            float lightDot = dot(eyeDirection, lightDir);
-            float volumetricIntensity = clamp(lightDot, 0.0, 1.0);
-            volumetricIntensity = max(volumetricIntensity, 0.15);
+            float volumetricIntensity = dot(eyeDirection, normalize((gbufferModelViewInverse * vec4(shadowLightPosition, 0.0)).xyz));
             volumetricIntensity =
-                pow(volumetricIntensity, volumetricDayMixer) * 0.6 * abs(dayNightMix * 2.0 - 1.0);
-
-            float skyFade = 1.0 - pow(clamp(d, 0.0, 1.0), 3.0);
+                pow(clamp((volumetricIntensity + 0.5) * 0.666666666666666, 0.0, 1.0), volumetricDayMixer) * 0.6 * abs(dayNightMix * 2.0 - 1.0);
 
             blockColor.rgb =
                 mix(blockColor.rgb, volumetricLightColor * volumetricLight,
-                    volumetricIntensity * (volumetricLight * 0.5 + 0.5) * (1.0 - rainStrength) * skyFade);
+                    volumetricIntensity * (volumetricLight * 0.5 + 0.5) * (1.0 - rainStrength));
         #endif
     #endif
 
