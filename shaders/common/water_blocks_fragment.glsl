@@ -262,7 +262,7 @@ void main() {
 
         #endif
 
-    } else {  // Otros translúcidos
+    } else {  // Otros transl煤cidos
         blockColor = texture2D(tex, texcoord);
 
         blockColor *= tintColor;
