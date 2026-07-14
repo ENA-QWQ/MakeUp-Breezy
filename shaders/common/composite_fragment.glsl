@@ -1,4 +1,4 @@
-#define ENABLE_OUTLINE 1 // [0 1]
+#define ENABLE_OUTLINE 0 // [0 1]
 
 #include "/lib/config.glsl"
 const bool colortex1MipmapEnabled = true;

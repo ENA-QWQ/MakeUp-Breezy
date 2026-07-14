@@ -270,7 +270,7 @@ void main() {
 
         vec3 finalMainLight;
         if (binaryLight > 0.5) {
-            float targetMaxLuma = mix(1.0, 0.3, nightFactor);
+            float targetMaxLuma = mix(1.35, 0.3, nightFactor);
             vec3 normalizedLight = mainLight / max(mainLightLuma, 0.001);
             vec3 finalLightColor = normalizedLight * targetMaxLuma;
             float blueBoost = mix(1.0, 1.1, nightFactor);
@@ -278,7 +278,7 @@ void main() {
             finalLightColor = finalLightColor / max(luma(finalLightColor), 0.001) * targetMaxLuma;
             finalMainLight = finalLightColor;
         } else {
-            vec3 darkColor = mix(vec3(0.2), vec3(0.04, 0.04, 0.10), nightFactor);
+            vec3 darkColor = mix(vec3(0.32, 0.32, 0.96), vec3(0.04, 0.04, 0.10), nightFactor);
             finalMainLight = darkColor;
         }
 
